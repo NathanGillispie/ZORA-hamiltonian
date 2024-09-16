@@ -1,0 +1,11 @@
+# Cmake files
+CMakeCache.txt
+CMakeFiles/
+*.cmake
+
+#Compiled binaries
+*.so
+
+# Environment
+.vscode/
+
