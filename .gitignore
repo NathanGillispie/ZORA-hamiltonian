@@ -3,9 +3,17 @@ CMakeCache.txt
 CMakeFiles/
 *.cmake
 
+# Python files
+__pycache__/
+
+# Psi4 generated files
+*.dat
+*.log
+
 #Compiled binaries
 *.so
 
 # Environment
 .vscode/
+*.code-workspace
 

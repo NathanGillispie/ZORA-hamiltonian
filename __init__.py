@@ -1,7 +1,7 @@
 #
 # @BEGIN LICENSE
 #
-# zora_core_excitation by Psi4 Developer, a plugin to:
+# zora_core_excitation by Nathan Gillispie, a plugin to:
 #
 # Psi4: an open-source quantum chemistry software package
 #
@@ -28,11 +28,11 @@
 # @END LICENSE
 #
 
-"""Plugin docstring.
-
+"""
+Test plugin initialization file. Read as a python module by psi4.
 """
 __version__ = '0.1'
-__author__  = 'Psi4 Developer'
+__author__  = 'Nathan Gillispie'
 
 # Load Python modules
 from .pymodule import *
@@ -43,4 +43,3 @@ import psi4
 plugdir = os.path.split(os.path.abspath(__file__))[0]
 sofile = plugdir + '/' + os.path.split(plugdir)[1] + '.so'
 psi4.core.plugin_load(sofile)
-

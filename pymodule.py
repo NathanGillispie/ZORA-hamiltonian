@@ -42,11 +42,10 @@ def run_zora_core_excitation(name, **kwargs):
     lowername = name.lower()
     kwargs = p4util.kwargs_lower(kwargs)
 
-    # Your plugin's psi4 run sequence goes here
-    psi4.core.set_local_option('MYPLUGIN', 'PRINT', 1)
+    #psi4.core.set_local_option('ZORA_CORE_EXCITATION', 'PRINT', 1)
 
-    # Compute a SCF reference, a wavefunction is return which holds the molecule used, orbitals
-    # Fock matrices, and more
+    # Compute a SCF reference, a wavefunction is returned.
+    # Holds molecule, orbitals, Fock matrices, and more
     print('Attention! This SCF may be density-fitted.')
     ref_wfn = kwargs.get('ref_wfn', None)
     if ref_wfn is None:
@@ -55,17 +54,17 @@ def run_zora_core_excitation(name, **kwargs):
     # Ensure IWL files have been written when not using DF/CD
     proc_util.check_iwl_file_from_scf_type(psi4.core.get_option('SCF', 'SCF_TYPE'), ref_wfn)
 
-    # Call the Psi4 plugin
-    # Please note that setting the reference wavefunction in this way is ONLY for plugins
-    zora_core_excitation_wfn = psi4.core.plugin('zora_core_excitation.so', ref_wfn)
+    psi4.core.timer_on("ZORA")
+    zora_core_excitation_wfn = psi4.core.plugin('zora_core_excitation.so', ref_wfn) # Calling plugin: Setting the reference wavefunction in this way is ONLY for plugins
+    psi4.core.timer_off("ZORA")
 
     return zora_core_excitation_wfn
 
-
-# Integration with driver routines
+# 
 psi4.driver.procedures['energy']['zora_core_excitation'] = run_zora_core_excitation
 
-
-def exampleFN():
-    # Your Python code goes here
+"""Extra function that can be called in the input file
+import zora_core_excitation ... zora_core_excitation.some_method()
+"""
+def some_method():
     pass

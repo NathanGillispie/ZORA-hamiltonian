@@ -13,14 +13,12 @@ R = .9
 A = 104.5
 }
 
-set {
-  basis sto-3g
-}
+basis STO-3G
 
-set zora_core_excitation {
-  print 1
-}
+set zora_core_excitation print 0
 
-energy('zora_core_excitation')
+h_energy = energy('zora_core_excitation')
 
-zora_core_excitation.exampleFN()
+D_e = psi_hartree2kcalmol * h_energy
+print ("E (Hartrees) = %f" % h_energy)
+print ("E (kcal/mol) = %f\n" % D_e)

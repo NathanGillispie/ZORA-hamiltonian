@@ -40,9 +40,13 @@ namespace psi{ namespace zora_core_excitation {
 extern "C" PSI_API
 int read_options(std::string name, Options& options)
 {
+    //Called when input file has a set mymodule key value
+    //Comments must be added in /*- -*/ form for documentation
     if (name == "ZORA_CORE_EXCITATION"|| options.read_globals()) {
-        /*- The amount of information printed to the output file -*/
+        /*- Used to specify how much is printed to stdout -*/
         options.add_int("PRINT", 1);
+        /*- Shhhhhhh -*/
+        options.add_int("SECRET", 42);
     }
 
     return true;
@@ -53,11 +57,11 @@ SharedWavefunction zora_core_excitation(SharedWavefunction ref_wfn, Options& opt
 {
     int print = options.get_int("PRINT");
 
-    /* Your code goes here */
+    printf("   %d   \n", print);    
 
-    // Typically you would build a new wavefunction and populate it with data
+    //build a new wavefunction and populate it with data
     return ref_wfn;
 }
 
-}} // End namespaces
+}}
 
