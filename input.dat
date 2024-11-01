@@ -6,19 +6,21 @@ import zora_core_excitation
 
 molecule {
 O
-H 1 R
-H 1 R 2 A
-
-R = .9
-A = 104.5
+H 1 1.1
+H 1 1.1 2 104
+symmetry c1
 }
 
-basis STO-3G
+set {
+  basis cc-pvdz
+  scf_type pk
+  reference uhf
+  dft_spherical_points 6
+  dft_radial_points 5
+}
 
-set zora_core_excitation print 0
+h_energy, wfn = energy('zora_core_excitation', return_wfn=True)
+print ("zora energy = %f" % h_energy)
 
-h_energy = energy('zora_core_excitation')
-
-D_e = psi_hartree2kcalmol * h_energy
-print ("E (Hartrees) = %f" % h_energy)
-print ("E (kcal/mol) = %f\n" % D_e)
+b3lyp_e = energy('b3lyp')
+print ("b3lyp energy = %f" % b3lyp_e)

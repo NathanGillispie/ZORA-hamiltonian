@@ -39,14 +39,15 @@ def run_zora_core_excitation(name, **kwargs):
     >>> energy('zora_core_excitation')
 
     """
+    
     lowername = name.lower()
     kwargs = p4util.kwargs_lower(kwargs)
 
-    #psi4.core.set_local_option('ZORA_CORE_EXCITATION', 'PRINT', 1)
+    psi4.core.set_local_option('ZORA_CORE_EXCITATION', 'PRINT', 5)
 
     # Compute a SCF reference, a wavefunction is returned.
     # Holds molecule, orbitals, Fock matrices, and more
-    print('Attention! This SCF may be density-fitted.')
+    #print('Attention! This SCF may be density-fitted.')
     ref_wfn = kwargs.get('ref_wfn', None)
     if ref_wfn is None:
         ref_wfn = psi4.driver.scf_helper(name, **kwargs)
@@ -60,7 +61,6 @@ def run_zora_core_excitation(name, **kwargs):
 
     return zora_core_excitation_wfn
 
-# 
 psi4.driver.procedures['energy']['zora_core_excitation'] = run_zora_core_excitation
 
 """Extra function that can be called in the input file

@@ -29,7 +29,7 @@
 #
 
 """
-Test plugin initialization file. Read as a python module by psi4.
+Plugin initialization file. Read as a python module by psi4.
 """
 __version__ = '0.1'
 __author__  = 'Nathan Gillispie'
@@ -39,7 +39,7 @@ from .pymodule import *
 
 # Load C++ plugin
 import os
-import psi4
+#import psi4 not needed because this is imported with `from .pymodule import *`
 plugdir = os.path.split(os.path.abspath(__file__))[0]
 sofile = plugdir + '/' + os.path.split(plugdir)[1] + '.so'
 psi4.core.plugin_load(sofile)
