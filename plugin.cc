@@ -1,5 +1,4 @@
-/*
- * @BEGIN LICENSE
+/* @BEGIN LICENSE
  *
  * zora_core_excitation by Psi4 Developer, a plugin to:
  *
@@ -31,15 +30,24 @@
 #include "psi4/psi4-dec.h"
 #include "psi4/libpsi4util/PsiOutStream.h"
 #include "psi4/liboptions/liboptions.h"
-#include "psi4/libmints/mintshelper.h"
-#include "psi4/libmints/sointegral_onebody.h"
-#include "psi4/libmints/sointegral_twobody.h"
-#include "psi4/libmints/matrix.h"
-#include "psi4/libmints/factory.h"
 #include "psi4/libmints/wavefunction.h"
 #include "psi4/libmints/molecule.h"
+#include "psi4/libfock/points.h"
+#include "psi4/libmints/matrix.h"
+
+#include "psi4/libfock/v.h"
+#include "psi4/libfunctional/superfunctional.h"
+#include "psi4/libscf_solver/hf.h"
+#include "psi4/libfock/cubature.h"
 
 namespace psi{ namespace zora_core_excitation {
+
+void compute_veff(std::shared_ptr<Molecule> mol, std::shared_ptr<DFTGrid> grid, SharedMatrix ret) {
+	int natoms = mol->natom();
+	//helper->potential_integral(std::vector<SharedVector>& grid data)
+	//molecule->Z(int atom)
+	//molecule->xyz(int atom) -> Vector3
+}
 
 extern "C" PSI_API
 int read_options(std::string name, Options& options)
@@ -55,62 +63,30 @@ int read_options(std::string name, Options& options)
 }
 
 extern "C" PSI_API
-SharedWavefunction zora_core_excitation(SharedWavefunction ref_wfn, Options& options)
-{
-    int print = options.get_int("PRINT");
-    printf("Print option = %d\n", print);
+SharedWavefunction zora_core_excitation(std::shared_ptr<scf::HF> ref_wfn, Options& options) {
+	if(!ref_wfn) throw PSIEXCEPTION("SCF has not ran yet!");
 
-    if(!ref_wfn) throw PSIEXCEPTION("SCF has not ran yet!");
+	int print = options.get_int("PRINT");
+	printf("Print option = %d\n", print);
 
-    // Need to check DDX options
+	auto Vpot = ref_wfn->V_potential();
+	if (!Vpot) throw PSIEXCEPTION("Must run DFT method");
+	Vpot->initialize();
+	auto grid = Vpot->grid();
 
-    //MintsHelper MintsHelper(ref_wfn->basisset(), options, print);
+	std::shared_ptr<PointFunctions> props = Vpot->properties()[0];
+	props->set_pointers(ref_wfn->Da());
 
-    std::shared_ptr<Molecule> molecule = ref_wfn->molecule();
-    std::shared_ptr<BasisSet> aoBasis = ref_wfn->basisset();
-    std::shared_ptr<SOBasisSet> soBasis = ref_wfn->sobasisset();
+	auto veff = std::make_shared<Matrix>(Vpot->nblocks(), grid->max_points(), 3);
+	compute_veff(ref_wfn->molecule(), grid, veff);
 
-    //molecule->print();
+	//Compute integrals, requires evaluating phi_mu(r)
+	//Can be done with the numinthelper line but I'm starting to think
+	//I would rather just do the integration myself. There's no reason to
+	//use std::vector for this. I know exactly what size and datatype I need
 
-    aoBasis->initialize_singletons();
-
-    const Dimension dimension = soBasis->dimension();
-
-    auto integral = std::make_shared<IntegralFactory>(aoBasis, aoBasis, aoBasis, aoBasis);
-
-    // The matrix factory can create matrices of the correct dimensions...
-    auto factory = std::make_shared<MatrixFactory>();
-    factory->init_with(dimension, dimension);
-
-    // Form the one-electron integral objects from the integral factory
-    std::shared_ptr<OneBodySOInt> sOBI(integral->so_overlap());
-    std::shared_ptr<OneBodySOInt> tOBI(integral->so_kinetic());
-    std::shared_ptr<OneBodySOInt> vOBI(integral->so_potential());
-    // Form the one-electron integral matrices from the matrix factory
-    SharedMatrix sMat(factory->create_matrix("Overlap"));
-    SharedMatrix tMat(factory->create_matrix("Kinetic"));
-    SharedMatrix vMat(factory->create_matrix("Potential"));
-    SharedMatrix hMat(factory->create_matrix("One Electron Ints"));
-
-    // Compute the one electron integrals, telling each object where to
-    // store the result
-    sOBI->compute(sMat);
-    tOBI->compute(tMat);
-    vOBI->compute(vMat);
-
-    if(print > 5){
-        sMat->print();
-    }
-    if(print > 3){
-        tMat->print();
-        vMat->print();
-    }
-    // Form h = T + V by first cloning T and then adding V
-    hMat->copy(tMat);
-    hMat->add(vMat);
-    hMat->print();
-
-    return ref_wfn;
+	Vpot->finalize();
+	return ref_wfn;
 }
 
 }}

@@ -36,18 +36,13 @@ def run_zora_core_excitation(name, **kwargs):
     r"""Function encoding sequence of PSI module and plugin calls so that
     zora_core_excitation can be called via :py:func:`~driver.energy`. For post-scf plugins.
 
-    >>> energy('zora_core_excitation')
-
-    """
-    
+    >>> energy('zora_core_excitation')"""
+ 
     lowername = name.lower()
     kwargs = p4util.kwargs_lower(kwargs)
 
-    psi4.core.set_local_option('ZORA_CORE_EXCITATION', 'PRINT', 5)
-
     # Compute a SCF reference, a wavefunction is returned.
     # Holds molecule, orbitals, Fock matrices, and more
-    #print('Attention! This SCF may be density-fitted.')
     ref_wfn = kwargs.get('ref_wfn', None)
     if ref_wfn is None:
         ref_wfn = psi4.driver.scf_helper(name, **kwargs)
@@ -56,15 +51,19 @@ def run_zora_core_excitation(name, **kwargs):
     proc_util.check_iwl_file_from_scf_type(psi4.core.get_option('SCF', 'SCF_TYPE'), ref_wfn)
 
     psi4.core.timer_on("ZORA")
-    zora_core_excitation_wfn = psi4.core.plugin('zora_core_excitation.so', ref_wfn) # Calling plugin: Setting the reference wavefunction in this way is ONLY for plugins
+    zora_wfn = psi4.core.plugin('zora_core_excitation.so', ref_wfn) # Calling plugin: Setting the reference wavefunction in this way is ONLY for plugins
     psi4.core.timer_off("ZORA")
 
-    return zora_core_excitation_wfn
+    return zora_wfn
 
-psi4.driver.procedures['energy']['zora_core_excitation'] = run_zora_core_excitation
+psi4.driver.procedures['energy']['zora'] = run_zora_core_excitation
 
-"""Extra function that can be called in the input file
-import zora_core_excitation ... zora_core_excitation.some_method()
-"""
-def some_method():
-    pass
+def form_H(wfn):
+    """Hack to get the V_potential... options aren't working above"""
+    print("potential: ", wfn.V_potential())
+
+    psi4.core.timer_on("ZORA")
+    zora_wfn = psi4.core.plugin('zora_core_excitation.so', wfn) # Calling plugin: Setting the reference wavefunction in this way is ONLY for plugins
+    psi4.core.timer_off("ZORA")
+    return zora_wfn
+

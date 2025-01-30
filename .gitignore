@@ -2,6 +2,7 @@
 CMakeCache.txt
 CMakeFiles/
 *.cmake
+Makefile
 
 # Python files
 __pycache__/
