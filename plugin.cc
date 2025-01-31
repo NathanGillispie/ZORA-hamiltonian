@@ -34,19 +34,58 @@
 #include "psi4/libmints/molecule.h"
 #include "psi4/libfock/points.h"
 #include "psi4/libmints/matrix.h"
+#include "psi4/libmints/vector.h"
 
 #include "psi4/libfock/v.h"
 #include "psi4/libfunctional/superfunctional.h"
 #include "psi4/libscf_solver/hf.h"
 #include "psi4/libfock/cubature.h"
+#include <cmath>
 
 namespace psi{ namespace zora_core_excitation {
 
-void compute_veff(std::shared_ptr<Molecule> mol, std::shared_ptr<DFTGrid> grid, SharedMatrix ret) {
+#include "bigScaryModelBasis.h"
+
+void compute_veff(std::shared_ptr<Molecule> mol, std::shared_ptr<VBase> Vpot, SharedMatrix ret) {
 	int natoms = mol->natom();
-	//helper->potential_integral(std::vector<SharedVector>& grid data)
+	int nblocks = ret->nrow();
+	int max_pts = ret->ncol();
+	
+	for (int a = 0; a < natoms; a++) {
+		int Z = mol->Z(a);
+		if (Z > 104) throw PSIEXCEPTION("Choose a chemically relevant system (Z too big)");
+		auto pos_a = mol->xyz(a);
+
+		double* coef_a  = &coeffs[c_aIndex[Z-1]];
+		double* alpha_a = &alphas[c_aIndex[Z-1]];
+		int nc_a = c_aIndex[Z] - c_aIndex[Z-1];
+
+	//pragma parallelize stuff
+		for (int b = 0; b < nblocks; b++) {
+			auto block = Vpot->get_block(b);
+			int npoints = block->npoints();
+			double* x = block->x();
+			double* y = block->y();
+			double* z = block->z();
+
+			//einsums("i,ip->p", 𝕔[A], erf(α⊗ r))/r
+			auto veff_block = ret->get_row(0,b);
+
+			for (int p = 0; p < npoints; p++) {
+				double dist = hypot(pos_a[0]-x[p], pos_a[1]-y[p], pos_a[2]-z[p]);
+				double outer = 0;
+				for (int i = 0; i < nc_a; i++) {
+					//check to make sure this is the correct erf
+					outer += std::erf(dist * alpha_a[i]) * coef_a[i];
+				}
+				outer /= dist;
+				outer -= Z/dist;
+				veff_block->set(p, outer);
+			}
+	//pragma parallelize
+		}
+	}
 	//molecule->Z(int atom)
-	//molecule->xyz(int atom) -> Vector3
 }
 
 extern "C" PSI_API
@@ -72,18 +111,20 @@ SharedWavefunction zora_core_excitation(std::shared_ptr<scf::HF> ref_wfn, Option
 	auto Vpot = ref_wfn->V_potential();
 	if (!Vpot) throw PSIEXCEPTION("Must run DFT method");
 	Vpot->initialize();
-	auto grid = Vpot->grid();
 
 	std::shared_ptr<PointFunctions> props = Vpot->properties()[0];
+	//may not be necessary to set Da pointer.
 	props->set_pointers(ref_wfn->Da());
 
-	auto veff = std::make_shared<Matrix>(Vpot->nblocks(), grid->max_points(), 3);
-	compute_veff(ref_wfn->molecule(), grid, veff);
+	auto veff = std::make_shared<Matrix>(Vpot->nblocks(), props->max_points());
+	compute_veff(ref_wfn->molecule(), Vpot, veff);
 
-	//Compute integrals, requires evaluating phi_mu(r)
-	//Can be done with the numinthelper line but I'm starting to think
-	//I would rather just do the integration myself. There's no reason to
-	//use std::vector for this. I know exactly what size and datatype I need
+	//Compute integrals, requires evaluating phi_mu(r) with basisset()->compute_phi(x,y,z)
+	//for i in block
+	//	ao_val <-- (max_pts, nbf, nbf)
+	//	for i,p in enumerate pts
+	//		ao_val[i] <-- compute_phi(p)
+	//	T_mu_nu += sap::integrate(ao_val, veff)
 
 	Vpot->finalize();
 	return ref_wfn;

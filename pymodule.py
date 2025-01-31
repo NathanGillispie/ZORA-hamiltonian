@@ -59,7 +59,6 @@ def run_zora_core_excitation(name, **kwargs):
 psi4.driver.procedures['energy']['zora'] = run_zora_core_excitation
 
 def form_H(wfn):
-    """Hack to get the V_potential... options aren't working above"""
     print("potential: ", wfn.V_potential())
 
     psi4.core.timer_on("ZORA")
