@@ -41,16 +41,18 @@
 #include "psi4/libscf_solver/hf.h"
 #include "psi4/libfock/cubature.h"
 #include <cmath>
+#include <vector>
 
 namespace psi{ namespace zora_core_excitation {
 
 #include "bigScaryModelBasis.h"
 
 void compute_veff(std::shared_ptr<Molecule> mol, std::shared_ptr<VBase> Vpot, SharedMatrix ret) {
-	int natoms = mol->natom();
+	double** veff = ret->pointer();
 	int nblocks = ret->nrow();
 	int max_pts = ret->ncol();
 	
+	int natoms = mol->natom();
 	for (int a = 0; a < natoms; a++) {
 		int Z = mol->Z(a);
 		if (Z > 104) throw PSIEXCEPTION("Choose a chemically relevant system (Z too big)");
@@ -69,8 +71,6 @@ void compute_veff(std::shared_ptr<Molecule> mol, std::shared_ptr<VBase> Vpot, Sh
 			double* z = block->z();
 
 			//einsums("i,ip->p", 𝕔[A], erf(α⊗ r))/r
-			auto veff_block = ret->get_row(0,b);
-
 			for (int p = 0; p < npoints; p++) {
 				double dist = hypot(pos_a[0]-x[p], pos_a[1]-y[p], pos_a[2]-z[p]);
 				double outer = 0;
@@ -80,12 +80,11 @@ void compute_veff(std::shared_ptr<Molecule> mol, std::shared_ptr<VBase> Vpot, Sh
 				}
 				outer /= dist;
 				outer -= Z/dist;
-				veff_block->set(p, outer);
+				veff[b][p] = outer;
 			}
 	//pragma parallelize
 		}
 	}
-	//molecule->Z(int atom)
 }
 
 extern "C" PSI_API
@@ -115,18 +114,55 @@ SharedWavefunction zora_core_excitation(std::shared_ptr<scf::HF> ref_wfn, Option
 	std::shared_ptr<PointFunctions> props = Vpot->properties()[0];
 	//may not be necessary to set Da pointer.
 	props->set_pointers(ref_wfn->Da());
-
+	props->set_ansatz(0); //necessary to avoid segfault when computing points
+	props->set_deriv(1);
+	
+	timer_on("Compute Veff");
 	auto veff = std::make_shared<Matrix>(Vpot->nblocks(), props->max_points());
 	compute_veff(ref_wfn->molecule(), Vpot, veff);
+	timer_off("Compute Veff");
+	
+	int max_funcs = props->max_functions();
+	auto T_SR = std::make_shared<Matrix>(max_funcs, max_funcs);
 
-	//Compute integrals, requires evaluating phi_mu(r) with basisset()->compute_phi(x,y,z)
-	//for i in block
-	//	ao_val <-- (max_pts, nbf, nbf)
-	//	for i,p in enumerate pts
-	//		ao_val[i] <-- compute_phi(p)
-	//	T_mu_nu += sap::integrate(ao_val, veff)
+	timer_on("Compute Scalar Relativistic T");
+	double** T_SRp = T_SR->pointer();
+	double**  veffp = veff->pointer();
+	double kernel[props->max_points()];
+
+#define C 137.037
+	for (int b = 0; b < Vpot->nblocks(); b++) {
+		auto block = Vpot->get_block(0);
+		int npoints = block->npoints();
+
+		props->compute_points(block);
+		double** phi_x = props->basis_value("PHI_X")->pointer();
+		double** phi_y = props->basis_value("PHI_Y")->pointer();
+		double** phi_z = props->basis_value("PHI_Z")->pointer();
+
+		auto w = block->w();
+
+		//preprocess kernel c^2/(2c^2-veff) * weight
+		for (int p = 0; p < npoints; p++) {
+			kernel[p] = C*C/(2.*C*C - veffp[b][p]) * w[p];
+		}
+
+		for (int mu = 0; mu < max_funcs; mu++) {
+			for (int nu = 0; nu < max_funcs; nu++) {
+				for (int p = 0; p < npoints; p++) {
+					T_SRp[mu][nu]+= phi_x[p][mu] * kernel[p] * phi_x[p][nu] +
+													phi_y[p][mu] * kernel[p] * phi_y[p][nu] +
+													phi_z[p][mu] * kernel[p] * phi_z[p][nu];
+				}
+			}
+		}
+	}
+	timer_off("Compute Scalar Relativistic T");
 
 	Vpot->finalize();
+	
+	T_SR->print_out();
+
 	return ref_wfn;
 }
 
