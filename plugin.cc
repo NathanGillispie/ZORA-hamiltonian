@@ -132,7 +132,7 @@ SharedWavefunction zora_core_excitation(std::shared_ptr<scf::HF> ref_wfn, Option
 
 #define C 137.037
 	for (int b = 0; b < Vpot->nblocks(); b++) {
-		auto block = Vpot->get_block(0);
+		auto block = Vpot->get_block(b);
 		int npoints = block->npoints();
 
 		props->compute_points(block);
@@ -150,9 +150,7 @@ SharedWavefunction zora_core_excitation(std::shared_ptr<scf::HF> ref_wfn, Option
 		for (int mu = 0; mu < max_funcs; mu++) {
 			for (int nu = 0; nu < max_funcs; nu++) {
 				for (int p = 0; p < npoints; p++) {
-					T_SRp[mu][nu]+= phi_x[p][mu] * kernel[p] * phi_x[p][nu] +
-													phi_y[p][mu] * kernel[p] * phi_y[p][nu] +
-													phi_z[p][mu] * kernel[p] * phi_z[p][nu];
+					T_SRp[mu][nu]+= (phi_x[p][mu] * phi_x[p][nu] + phi_y[p][mu] * phi_y[p][nu] + phi_z[p][mu] * phi_z[p][nu]) * kernel[p];
 				}
 			}
 		}
