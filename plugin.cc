@@ -41,11 +41,11 @@
 #include "psi4/libscf_solver/hf.h"
 #include "psi4/libfock/cubature.h"
 #include <cmath>
-#include <vector>
 
 namespace psi{ namespace zora_core_excitation {
 
 #include "bigScaryModelBasis.h"
+#define C 137.037
 
 void compute_veff(std::shared_ptr<Molecule> mol, std::shared_ptr<VBase> Vpot, SharedMatrix ret) {
 	double** veff = ret->pointer();
@@ -57,7 +57,8 @@ void compute_veff(std::shared_ptr<Molecule> mol, std::shared_ptr<VBase> Vpot, Sh
 		int Z = mol->Z(a);
 		if (Z > 104) throw PSIEXCEPTION("Choose a chemically relevant system (Z too big)");
 		auto pos_a = mol->xyz(a);
-
+		
+		//Get the list of coefficients and alphas for given atom
 		double* coef_a  = &coeffs[c_aIndex[Z-1]];
 		double* alpha_a = &alphas[c_aIndex[Z-1]];
 		int nc_a = c_aIndex[Z] - c_aIndex[Z-1];
@@ -112,9 +113,10 @@ SharedWavefunction zora_core_excitation(std::shared_ptr<scf::HF> ref_wfn, Option
 	Vpot->initialize();
 
 	std::shared_ptr<PointFunctions> props = Vpot->properties()[0];
-	//may not be necessary to set Da pointer.
-	props->set_pointers(ref_wfn->Da());
-	props->set_ansatz(0); //necessary to avoid segfault when computing points
+	/* RKS/UKS pointsFunctions computes unnecessary stuff with
+	 * `compute_points`, I don't yet know how to call `compute_functions`
+	 * without segfault. That would make the following two lines unecessary.*/
+	props->set_ansatz(0);
 	props->set_deriv(1);
 	
 	timer_on("Compute Veff");
@@ -123,14 +125,16 @@ SharedWavefunction zora_core_excitation(std::shared_ptr<scf::HF> ref_wfn, Option
 	timer_off("Compute Veff");
 	
 	int max_funcs = props->max_functions();
-	auto T_SR = std::make_shared<Matrix>(max_funcs, max_funcs);
 
-	timer_on("Compute Scalar Relativistic T");
-	double** T_SRp = T_SR->pointer();
 	double**  veffp = veff->pointer();
 	double kernel[props->max_points()];
 
-#define C 137.037
+	auto T_SR = std::make_shared<Matrix>(max_funcs, max_funcs);
+	T_SR->zero();
+	double** T_SRp = T_SR->pointer();
+
+	timer_on("Scalar Relativistic Kinetic");
+
 	for (int b = 0; b < Vpot->nblocks(); b++) {
 		auto block = Vpot->get_block(b);
 		int npoints = block->npoints();
@@ -142,24 +146,78 @@ SharedWavefunction zora_core_excitation(std::shared_ptr<scf::HF> ref_wfn, Option
 
 		auto w = block->w();
 
-		//preprocess kernel c^2/(2c^2-veff) * weight
+		//preprocess kernel c²/(2c²-veff) * weight
 		for (int p = 0; p < npoints; p++) {
 			kernel[p] = C*C/(2.*C*C - veffp[b][p]) * w[p];
 		}
 
+		//compute upper triangular half, T_SR is symmetric
 		for (int mu = 0; mu < max_funcs; mu++) {
-			for (int nu = 0; nu < max_funcs; nu++) {
+			for (int nu = mu; nu < max_funcs; nu++) {
 				for (int p = 0; p < npoints; p++) {
 					T_SRp[mu][nu]+= (phi_x[p][mu] * phi_x[p][nu] + phi_y[p][mu] * phi_y[p][nu] + phi_z[p][mu] * phi_z[p][nu]) * kernel[p];
 				}
 			}
 		}
 	}
-	timer_off("Compute Scalar Relativistic T");
+	T_SR->copy_upper_to_lower();
+	timer_off("Scalar Relativistic Kinetic");
+
+
+	auto H_SOx = std::make_shared<Matrix>("H_SOx", max_funcs, max_funcs);
+	auto H_SOy = std::make_shared<Matrix>("H_SOy", max_funcs, max_funcs);
+	auto H_SOz = std::make_shared<Matrix>("H_SOz", max_funcs, max_funcs);
+	double** H_SOxp = H_SOx->pointer();
+	double** H_SOyp = H_SOy->pointer();
+	double** H_SOzp = H_SOz->pointer();
+	
+	timer_on("Spin-orbit terms");
+	for (int b = 0; b < Vpot->nblocks(); b++) {
+		auto block = Vpot->get_block(b);
+		int npoints = block->npoints();
+
+		props->compute_points(block);
+		double** phi_x = props->basis_value("PHI_X")->pointer();
+		double** phi_y = props->basis_value("PHI_Y")->pointer();
+		double** phi_z = props->basis_value("PHI_Z")->pointer();
+
+		auto w = block->w();
+
+		//preprocess kernel veff/(4c²-2veff) * weight
+		for (int p = 0; p < npoints; p++) {
+			kernel[p] = veffp[b][p]/(4.*C*C - 2.*veffp[b][p]) * w[p];
+		}
+		
+		//compute upper triangular half. H_SO are antisymmetric.
+		for (int mu = 0; mu < max_funcs; mu++) {
+			for (int nu = mu+1; nu < max_funcs; nu++) {
+				for (int p = 0; p < npoints; p++) {
+					H_SOxp[mu][nu] += (phi_y[p][mu]*phi_z[p][nu] - phi_z[p][mu]*phi_y[p][nu]) * kernel[p];
+					H_SOyp[mu][nu] += (phi_z[p][mu]*phi_x[p][nu] - phi_x[p][mu]*phi_z[p][nu]) * kernel[p];
+					H_SOzp[mu][nu] += (phi_x[p][mu]*phi_y[p][nu] - phi_y[p][mu]*phi_x[p][nu]) * kernel[p];
+				}
+			}
+		}
+	}
+	
+	//keep it simple silly
+	for (int mu = 0; mu < max_funcs; mu++) {
+		for (int nu = mu - 1; nu >= 0; nu--) {
+			H_SOxp[mu][nu] = -H_SOxp[nu][mu];
+			H_SOyp[mu][nu] = -H_SOyp[nu][mu];
+			H_SOzp[mu][nu] = -H_SOzp[nu][mu];
+		}
+	}
+	timer_off("Spin-orbit terms");
 
 	Vpot->finalize();
 	
 	T_SR->print_out();
+
+	T_SR->save("mats/T_SR.mat", false, false);
+	H_SOx->save("mats/H_SOx.mat", false, false);
+	H_SOy->save("mats/H_SOy.mat", false, false);
+	H_SOz->save("mats/H_SOz.mat", false, false);
 
 	return ref_wfn;
 }
