@@ -218,7 +218,6 @@ SharedWavefunction zora_core_excitation(std::shared_ptr<scf::HF> ref_wfn, Option
 	int nbf = primary->nbf();
 	BasisFunctions bf_computer(primary, grid->max_points(), grid->max_functions());
 
-
 	for (const auto &block : grid->blocks()) {
 		// grid points in this block
 		int npoints = block->npoints();
@@ -228,6 +227,7 @@ SharedWavefunction zora_core_excitation(std::shared_ptr<scf::HF> ref_wfn, Option
 		// compute basis functions at these grid points
 		bf_computer.compute_functions(block);
 		auto point_values = bf_computer.basis_values()["PHI"];
+		//check out COSK.cc
 
 	}
 
@@ -235,7 +235,7 @@ SharedWavefunction zora_core_excitation(std::shared_ptr<scf::HF> ref_wfn, Option
 
 	int max_funcs = props->max_functions();
 	timer_on("Scalar Relativistic Kinetic");
-	auto T_SR = std::make_shared<Matrix>(, max_funcs);
+	auto T_SR = std::make_shared<Matrix>(max_funcs, max_funcs);
 	compute_TSR(Vpot, veff, T_SR);
 	timer_off("Scalar Relativistic Kinetic");
 
@@ -248,8 +248,6 @@ SharedWavefunction zora_core_excitation(std::shared_ptr<scf::HF> ref_wfn, Option
 
 	Vpot->finalize();
 	
-	T_SR->print_out();
-
 	T_SR->save("mats/T_SR.mat", false, false);
 	H_SOx->save("mats/H_SOx.mat", false, false);
 	H_SOy->save("mats/H_SOy.mat", false, false);

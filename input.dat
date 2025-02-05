@@ -4,7 +4,6 @@ import zora_core_excitation
 molecule {
 0 1
 Ne 0 0 0
-Ne 1 0 0
 symmetry c1
 }
 
