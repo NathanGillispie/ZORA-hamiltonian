@@ -62,4 +62,4 @@ if __name__ == '__main__':
     b = bohrm[0]
 
     print("psi4m\n",np.array_str(a))
-    print("bohrm\n",np.array_str(b))
+    #print("bohrm\n",np.array_str(b))

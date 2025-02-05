@@ -32,6 +32,7 @@
 #include "psi4/liboptions/liboptions.h"
 #include "psi4/libmints/wavefunction.h"
 #include "psi4/libmints/molecule.h"
+#include "psi4/libmints/basisset.h"
 #include "psi4/libfock/points.h"
 #include "psi4/libmints/matrix.h"
 #include "psi4/libmints/vector.h"
@@ -88,52 +89,14 @@ void compute_veff(std::shared_ptr<Molecule> mol, std::shared_ptr<VBase> Vpot, Sh
 	}
 }
 
-extern "C" PSI_API
-int read_options(std::string name, Options& options)
-{
-    //Called when input file has a set mymodule key value
-    //Comments must be added in /*- -*/ form for documentation
-    if (name == "ZORA_CORE_EXCITATION"|| options.read_globals()) {
-        /*- Used to specify how much is printed to the output -*/
-        options.add_int("PRINT", 1);
-    }
-
-    return true;
-}
-
-extern "C" PSI_API
-SharedWavefunction zora_core_excitation(std::shared_ptr<scf::HF> ref_wfn, Options& options) {
-	if(!ref_wfn) throw PSIEXCEPTION("SCF has not ran yet!");
-
-	int print = options.get_int("PRINT");
-	printf("Print option = %d\n", print);
-
-	auto Vpot = ref_wfn->V_potential();
-	if (!Vpot) throw PSIEXCEPTION("Must run DFT method");
-	Vpot->initialize();
-
+//Scalar Relativistic Kinetic Energy Matrix
+void compute_TSR(std::shared_ptr<VBase> Vpot, SharedMatrix veff, SharedMatrix T_SR) {
 	std::shared_ptr<PointFunctions> props = Vpot->properties()[0];
-	/* RKS/UKS pointsFunctions computes unnecessary stuff with
-	 * `compute_points`, I don't yet know how to call `compute_functions`
-	 * without segfault. That would make the following two lines unecessary.*/
-	props->set_ansatz(0);
-	props->set_deriv(1);
-	
-	timer_on("Compute Veff");
-	auto veff = std::make_shared<Matrix>(Vpot->nblocks(), props->max_points());
-	compute_veff(ref_wfn->molecule(), Vpot, veff);
-	timer_off("Compute Veff");
-	
+	double** veffp = veff->pointer();
+	double** T_SRp = T_SR->pointer();
 	int max_funcs = props->max_functions();
 
-	double**  veffp = veff->pointer();
 	double kernel[props->max_points()];
-
-	auto T_SR = std::make_shared<Matrix>(max_funcs, max_funcs);
-	T_SR->zero();
-	double** T_SRp = T_SR->pointer();
-
-	timer_on("Scalar Relativistic Kinetic");
 
 	for (int b = 0; b < Vpot->nblocks(); b++) {
 		auto block = Vpot->get_block(b);
@@ -144,7 +107,7 @@ SharedWavefunction zora_core_excitation(std::shared_ptr<scf::HF> ref_wfn, Option
 		double** phi_y = props->basis_value("PHI_Y")->pointer();
 		double** phi_z = props->basis_value("PHI_Z")->pointer();
 
-		auto w = block->w();
+		double* w = block->w();
 
 		//preprocess kernel c²/(2c²-veff) * weight
 		for (int p = 0; p < npoints; p++) {
@@ -161,17 +124,19 @@ SharedWavefunction zora_core_excitation(std::shared_ptr<scf::HF> ref_wfn, Option
 		}
 	}
 	T_SR->copy_upper_to_lower();
-	timer_off("Scalar Relativistic Kinetic");
+}
 
+void compute_SO(std::shared_ptr<VBase> Vpot, SharedMatrix veff, SharedMatrix H_SOx, SharedMatrix H_SOy, SharedMatrix H_SOz) {
+	std::shared_ptr<PointFunctions> props = Vpot->properties()[0];
+	int max_funcs = props->max_functions();
 
-	auto H_SOx = std::make_shared<Matrix>("H_SOx", max_funcs, max_funcs);
-	auto H_SOy = std::make_shared<Matrix>("H_SOy", max_funcs, max_funcs);
-	auto H_SOz = std::make_shared<Matrix>("H_SOz", max_funcs, max_funcs);
+	double** veffp = veff->pointer();
 	double** H_SOxp = H_SOx->pointer();
 	double** H_SOyp = H_SOy->pointer();
 	double** H_SOzp = H_SOz->pointer();
-	
-	timer_on("Spin-orbit terms");
+
+	double kernel[props->max_points()];
+
 	for (int b = 0; b < Vpot->nblocks(); b++) {
 		auto block = Vpot->get_block(b);
 		int npoints = block->npoints();
@@ -208,6 +173,77 @@ SharedWavefunction zora_core_excitation(std::shared_ptr<scf::HF> ref_wfn, Option
 			H_SOzp[mu][nu] = -H_SOzp[nu][mu];
 		}
 	}
+
+}
+
+extern "C" PSI_API
+int read_options(std::string name, Options& options)
+{
+    //Called when input file has a set mymodule key value
+    //Comments must be added in /*- -*/ form for documentation
+    if (name == "ZORA_CORE_EXCITATION"|| options.read_globals()) {
+        /*- Used to specify how much is printed to the output -*/
+        options.add_int("PRINT", 1);
+    }
+
+    return true;
+}
+
+extern "C" PSI_API
+SharedWavefunction zora_core_excitation(std::shared_ptr<scf::HF> ref_wfn, Options& options) {
+	if(!ref_wfn) throw PSIEXCEPTION("SCF has not ran yet!");
+
+	int print = options.get_int("PRINT");
+	printf("Print option = %d\n", print);
+
+	auto Vpot = ref_wfn->V_potential();
+	if (!Vpot) throw PSIEXCEPTION("Must run DFT method");
+	Vpot->initialize();
+
+	std::shared_ptr<PointFunctions> props = Vpot->properties()[0];
+
+	props->set_ansatz(1);
+	
+	timer_on("Compute Veff");
+	auto veff = std::make_shared<Matrix>(Vpot->nblocks(), props->max_points());
+	compute_veff(ref_wfn->molecule(), Vpot, veff);
+	timer_off("Compute Veff");
+
+//////////////////////////////////////////////////////////////////////////
+
+	//try sobasisset() potentially?
+	auto primary = ref_wfn->basisset();
+	std::shared_ptr<DFTGrid> grid = Vpot->grid();
+
+	int nbf = primary->nbf();
+	BasisFunctions bf_computer(primary, grid->max_points(), grid->max_functions());
+
+
+	for (const auto &block : grid->blocks()) {
+		// grid points in this block
+		int npoints = block->npoints();
+		int nbf_block = block->local_nbf();
+		auto w = block->w();
+
+		// compute basis functions at these grid points
+		bf_computer.compute_functions(block);
+		auto point_values = bf_computer.basis_values()["PHI"];
+
+	}
+
+//////////////////////////////////////////////////////////////////////////
+
+	int max_funcs = props->max_functions();
+	timer_on("Scalar Relativistic Kinetic");
+	auto T_SR = std::make_shared<Matrix>(, max_funcs);
+	compute_TSR(Vpot, veff, T_SR);
+	timer_off("Scalar Relativistic Kinetic");
+
+	timer_on("Spin-orbit terms");
+	auto H_SOx = std::make_shared<Matrix>("H_SOx", max_funcs, max_funcs);
+	auto H_SOy = std::make_shared<Matrix>("H_SOy", max_funcs, max_funcs);
+	auto H_SOz = std::make_shared<Matrix>("H_SOz", max_funcs, max_funcs);
+	compute_SO(Vpot, veff, H_SOx, H_SOy, H_SOz);
 	timer_off("Spin-orbit terms");
 
 	Vpot->finalize();
