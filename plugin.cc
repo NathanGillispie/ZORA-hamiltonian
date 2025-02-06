@@ -36,11 +36,12 @@
 #include "psi4/libfock/points.h"
 #include "psi4/libmints/matrix.h"
 #include "psi4/libmints/vector.h"
-
 #include "psi4/libfock/v.h"
+
 #include "psi4/libfunctional/superfunctional.h"
 #include "psi4/libscf_solver/hf.h"
 #include "psi4/libfock/cubature.h"
+#include <vector>
 #include <cmath>
 
 namespace psi{ namespace zora_core_excitation {
@@ -48,11 +49,8 @@ namespace psi{ namespace zora_core_excitation {
 #include "bigScaryModelBasis.h"
 #define C 137.037
 
-void compute_veff(std::shared_ptr<Molecule> mol, std::shared_ptr<VBase> Vpot, SharedMatrix ret) {
-	double** veff = ret->pointer();
-	int nblocks = ret->nrow();
-	int max_pts = ret->ncol();
-	
+void compute_veff(std::shared_ptr<Molecule> mol, std::shared_ptr<DFTGrid> &grid, SharedMatrix veff) {
+
 	int natoms = mol->natom();
 	for (int a = 0; a < natoms; a++) {
 		int Z = mol->Z(a);
@@ -64,13 +62,20 @@ void compute_veff(std::shared_ptr<Molecule> mol, std::shared_ptr<VBase> Vpot, Sh
 		double* alpha_a = &alphas[c_aIndex[Z-1]];
 		int nc_a = c_aIndex[Z] - c_aIndex[Z-1];
 
-	//pragma parallelize stuff
-		for (int b = 0; b < nblocks; b++) {
-			auto block = Vpot->get_block(b);
+		int running_total = 0; //DEBUG
+		
+		for (const auto &block : grid->blocks()) {
 			int npoints = block->npoints();
+			int b = block->index();
+
+			if (b > veff->nrow()) std::cout << "b " << b << " nrow " << veff->nrow() << std::endl;
+			if (npoints > veff->ncol()) std::cout << "npoints " << npoints << " ncol " << veff->ncol() << std::endl;
+
 			double* x = block->x();
 			double* y = block->y();
 			double* z = block->z();
+
+			std::cout << "Computed " << running_total << " points. block " << block->index() << "\n";
 
 			//einsums("i,ip->p", 𝕔[A], erf(α⊗ r))/r
 			for (int p = 0; p < npoints; p++) {
@@ -82,84 +87,103 @@ void compute_veff(std::shared_ptr<Molecule> mol, std::shared_ptr<VBase> Vpot, Sh
 				}
 				outer /= dist;
 				outer -= Z/dist;
-				veff[b][p] = outer;
+				veff->set(b, p, outer);
 			}
-	//pragma parallelize
+
+			running_total += npoints; //DEBUG
 		}
 	}
 }
 
 //Scalar Relativistic Kinetic Energy Matrix
-void compute_TSR(std::shared_ptr<VBase> Vpot, SharedMatrix veff, SharedMatrix T_SR) {
-	std::shared_ptr<PointFunctions> props = Vpot->properties()[0];
+void compute_TSR(std::shared_ptr<DFTGrid> &grid, BasisFunctions &props, SharedMatrix &veff, SharedMatrix &T_SR) {
+
 	double** veffp = veff->pointer();
 	double** T_SRp = T_SR->pointer();
-	int max_funcs = props->max_functions();
+	int max_funcs = props.max_functions();
 
-	double kernel[props->max_points()];
+	double* kernel = new double[props.max_points()];
 
-	for (int b = 0; b < Vpot->nblocks(); b++) {
-		auto block = Vpot->get_block(b);
+	int running_total = 0; //DEBUG LINE
+
+	for (const auto &block : grid->blocks()) {
+	  const auto &bf_map = block->functions_local_to_global();
+		auto local_nbf = bf_map.size();
 		int npoints = block->npoints();
 
-		props->compute_points(block);
-		double** phi_x = props->basis_value("PHI_X")->pointer();
-		double** phi_y = props->basis_value("PHI_Y")->pointer();
-		double** phi_z = props->basis_value("PHI_Z")->pointer();
+
+		props.compute_functions(block);
+		auto phi_x = props.basis_value("PHI_X");
+		auto phi_y = props.basis_value("PHI_Y");
+		auto phi_z = props.basis_value("PHI_Z");
 
 		double* w = block->w();
 
+		if (block->index() == 591) {
+			std::cout << "block index " << block->index() << std::endl;
+			std::cout << phi_y->nrow() << ", " << phi_y->ncol() << std::endl;
+			std::cout << "npoints = " << npoints << std::endl;
+		}
 		//preprocess kernel c²/(2c²-veff) * weight
 		for (int p = 0; p < npoints; p++) {
-			kernel[p] = C*C/(2.*C*C - veffp[b][p]) * w[p];
+			kernel[p] = C*C/(2.*C*C - veffp[block->index()][p]) * w[p];
 		}
 
-		//compute upper triangular half, T_SR is symmetric
-		for (int mu = 0; mu < max_funcs; mu++) {
-			for (int nu = mu; nu < max_funcs; nu++) {
+		std::cout << "Computed " << running_total << " points. block " << block->index() << "\n";
+
+		for (int l_mu = 0; l_mu < local_nbf; l_mu++) {
+			int mu = bf_map[l_mu];
+			for (int l_nu = l_mu; l_nu < local_nbf; l_nu++) {
+				int nu = bf_map[l_nu];
 				for (int p = 0; p < npoints; p++) {
-					T_SRp[mu][nu]+= (phi_x[p][mu] * phi_x[p][nu] + phi_y[p][mu] * phi_y[p][nu] + phi_z[p][mu] * phi_z[p][nu]) * kernel[p];
+					T_SRp[mu][nu] += ( phi_x->get(p,l_mu)*phi_x->get(p,l_nu) + phi_y->get(p,l_mu)*phi_y->get(p,l_nu) + phi_z->get(p,l_mu)*phi_z->get(p,l_nu) ) * kernel[p];
 				}
 			}
 		}
+		running_total += npoints; //DEBUG LINE
 	}
+
+
 	T_SR->copy_upper_to_lower();
+	delete kernel;
 }
 
-void compute_SO(std::shared_ptr<VBase> Vpot, SharedMatrix veff, SharedMatrix H_SOx, SharedMatrix H_SOy, SharedMatrix H_SOz) {
-	std::shared_ptr<PointFunctions> props = Vpot->properties()[0];
-	int max_funcs = props->max_functions();
-
+void compute_SO(std::shared_ptr<DFTGrid> &grid, BasisFunctions &props, SharedMatrix veff, SharedMatrix H_SOx, SharedMatrix H_SOy, SharedMatrix H_SOz) {
 	double** veffp = veff->pointer();
+	int max_funcs = props.max_functions();
+
 	double** H_SOxp = H_SOx->pointer();
 	double** H_SOyp = H_SOy->pointer();
 	double** H_SOzp = H_SOz->pointer();
 
-	double kernel[props->max_points()];
+	double* kernel = new double[props.max_points()];
 
-	for (int b = 0; b < Vpot->nblocks(); b++) {
-		auto block = Vpot->get_block(b);
+	for (const auto &block : grid->blocks()) {
 		int npoints = block->npoints();
+		int local_nbf = block->local_nbf();
 
-		props->compute_points(block);
-		double** phi_x = props->basis_value("PHI_X")->pointer();
-		double** phi_y = props->basis_value("PHI_Y")->pointer();
-		double** phi_z = props->basis_value("PHI_Z")->pointer();
+		props.compute_functions(block);
+		auto phi_x = props.basis_value("PHI_X");
+		auto phi_y = props.basis_value("PHI_Y");
+		auto phi_z = props.basis_value("PHI_Z");
 
 		auto w = block->w();
-
+		int b = block->index();
 		//preprocess kernel veff/(4c²-2veff) * weight
 		for (int p = 0; p < npoints; p++) {
 			kernel[p] = veffp[b][p]/(4.*C*C - 2.*veffp[b][p]) * w[p];
 		}
 		
+	  const auto &bf_map = block->functions_local_to_global();
 		//compute upper triangular half. H_SO are antisymmetric.
-		for (int mu = 0; mu < max_funcs; mu++) {
-			for (int nu = mu+1; nu < max_funcs; nu++) {
+		for (int mu_l = 0; mu_l < local_nbf; mu_l++) {
+			int mu = bf_map[mu_l];
+			for (int nu_l = mu+1; nu_l < local_nbf; nu_l++) {
+				int nu = bf_map[nu_l];
 				for (int p = 0; p < npoints; p++) {
-					H_SOxp[mu][nu] += (phi_y[p][mu]*phi_z[p][nu] - phi_z[p][mu]*phi_y[p][nu]) * kernel[p];
-					H_SOyp[mu][nu] += (phi_z[p][mu]*phi_x[p][nu] - phi_x[p][mu]*phi_z[p][nu]) * kernel[p];
-					H_SOzp[mu][nu] += (phi_x[p][mu]*phi_y[p][nu] - phi_y[p][mu]*phi_x[p][nu]) * kernel[p];
+					H_SOxp[mu][nu] += (phi_y->get(p,mu_l)*phi_z->get(p,nu_l) - phi_z->get(p,mu_l)*phi_y->get(p,nu_l)) * kernel[p];
+					H_SOyp[mu][nu] += (phi_z->get(p,mu_l)*phi_x->get(p,nu_l) - phi_x->get(p,mu_l)*phi_z->get(p,nu_l)) * kernel[p];
+					H_SOzp[mu][nu] += (phi_x->get(p,mu_l)*phi_y->get(p,nu_l) - phi_y->get(p,mu_l)*phi_x->get(p,nu_l)) * kernel[p];
 				}
 			}
 		}
@@ -173,7 +197,8 @@ void compute_SO(std::shared_ptr<VBase> Vpot, SharedMatrix veff, SharedMatrix H_S
 			H_SOzp[mu][nu] = -H_SOzp[nu][mu];
 		}
 	}
-
+	
+	delete kernel;
 }
 
 extern "C" PSI_API
@@ -200,51 +225,36 @@ SharedWavefunction zora_core_excitation(std::shared_ptr<scf::HF> ref_wfn, Option
 	if (!Vpot) throw PSIEXCEPTION("Must run DFT method");
 	Vpot->initialize();
 
-	std::shared_ptr<PointFunctions> props = Vpot->properties()[0];
-
-	props->set_ansatz(1);
 	
-	timer_on("Compute Veff");
-	auto veff = std::make_shared<Matrix>(Vpot->nblocks(), props->max_points());
-	compute_veff(ref_wfn->molecule(), Vpot, veff);
-	timer_off("Compute Veff");
-
-//////////////////////////////////////////////////////////////////////////
-
-	//try sobasisset() potentially?
 	auto primary = ref_wfn->basisset();
 	std::shared_ptr<DFTGrid> grid = Vpot->grid();
+	//TODO: Construct DFT grid manually
 
-	int nbf = primary->nbf();
 	BasisFunctions bf_computer(primary, grid->max_points(), grid->max_functions());
+	bf_computer.set_deriv(1);
+	int max_funcs = bf_computer.max_functions();
 
-	for (const auto &block : grid->blocks()) {
-		// grid points in this block
-		int npoints = block->npoints();
-		int nbf_block = block->local_nbf();
-		auto w = block->w();
+	timer_on("Compute Veff");
+	int nblocks = grid->blocks().size();
+	auto veff = std::make_shared<Matrix>("Effective potential", nblocks, bf_computer.max_points());
+	compute_veff(ref_wfn->molecule(), grid, veff);
+	timer_off("Compute Veff");
 
-		// compute basis functions at these grid points
-		bf_computer.compute_functions(block);
-		auto point_values = bf_computer.basis_values()["PHI"];
-		//check out COSK.cc
-
-	}
-
-//////////////////////////////////////////////////////////////////////////
-
-	int max_funcs = props->max_functions();
 	timer_on("Scalar Relativistic Kinetic");
 	auto T_SR = std::make_shared<Matrix>(max_funcs, max_funcs);
-	compute_TSR(Vpot, veff, T_SR);
+	compute_TSR(grid, bf_computer, veff, T_SR);
 	timer_off("Scalar Relativistic Kinetic");
+
+	std::cout<<"Computed TSR"<<std::endl;
 
 	timer_on("Spin-orbit terms");
 	auto H_SOx = std::make_shared<Matrix>("H_SOx", max_funcs, max_funcs);
 	auto H_SOy = std::make_shared<Matrix>("H_SOy", max_funcs, max_funcs);
 	auto H_SOz = std::make_shared<Matrix>("H_SOz", max_funcs, max_funcs);
-	compute_SO(Vpot, veff, H_SOx, H_SOy, H_SOz);
+	compute_SO(grid, bf_computer, veff, H_SOx, H_SOy, H_SOz);
 	timer_off("Spin-orbit terms");
+
+	std::cout<<"Computed HSO terms"<<std::endl;
 
 	Vpot->finalize();
 	

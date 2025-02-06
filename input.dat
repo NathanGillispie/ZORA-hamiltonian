@@ -8,9 +8,9 @@ symmetry c1
 }
 
 set {
-  basis sto-3g
+  basis cc-pvdz
   scf_type pk
-	dft_radial_scheme BECKE
+	dft_radial_points 600
   reference rks
 }
 

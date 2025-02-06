@@ -59,8 +59,6 @@ def run_zora_core_excitation(name, **kwargs):
 psi4.driver.procedures['energy']['zora'] = run_zora_core_excitation
 
 def form_H(wfn):
-    print("potential: ", wfn.V_potential())
-
     psi4.core.timer_on("ZORA")
     zora_wfn = psi4.core.plugin('zora_core_excitation.so', wfn) # Calling plugin: Setting the reference wavefunction in this way is ONLY for plugins
     psi4.core.timer_off("ZORA")

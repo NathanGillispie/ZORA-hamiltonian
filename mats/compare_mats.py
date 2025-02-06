@@ -47,19 +47,21 @@ if __name__ == '__main__':
     psi4m = get_psi4_mats()
     bohrm = get_pkl('bohrmats.pkl')
 
-    bohr_keys = {'T_SR', 'H_SOx', 'H_SOy', 'H_SOz'}
-    common = list(set(psi4m.keys()).intersection(bohr_keys))
+    common = list(set(psi4m.keys()).intersection(set(bohrm.keys())))
 
-    if (bohrm[0].shape != psi4m[common[0]].shape):
-        exit("Shape mismatch")
+    if (bohrm[common[0]].shape != psi4m[common[0]].shape):
+        print("Shape mismatch:", common[0], "size")
+        print("Bohr ->", bohrm[common[0]].shape)
+        print("Psi4 ->", psi4m[common[0]].shape)
+        exit(1)
 
     for i, name in enumerate(common):
         print ("\n  Diffs of", name)
-        diff_mat(psi4m[name], bohrm[i])
-    np.set_printoptions(linewidth = 100, floatmode="fixed", precision=6,suppress=True)
+        diff_mat(psi4m[name], bohrm[name])
+    np.set_printoptions(linewidth = 200, floatmode="fixed", precision=4,suppress=True)
 
     a = psi4m['T_SR']
-    b = bohrm[0]
+    b = bohrm['T_SR']
 
     print("psi4m\n",np.array_str(a))
-    #print("bohrm\n",np.array_str(b))
+    print("bohrm\n",np.array_str(b))
