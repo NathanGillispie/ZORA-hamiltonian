@@ -38,19 +38,15 @@
 #include "psi4/libfock/points.h"
 #include "psi4/libfock/cubature.h"
 #include "psi4/libfock/v.h"
-
-#include "psi4/libfunctional/superfunctional.h"
 #include "psi4/libscf_solver/hf.h"
 #include <cmath>
-//#include <map>
-
 
 namespace psi{ namespace zora_core_excitation {
 
 #include "bigScaryModelBasis.h"
 #define speed_of_light 137.037
 
-void compute_veff(std::shared_ptr<Molecule> mol, DFTGrid grid, SharedMatrix veff) {
+void compute_veff(std::shared_ptr<Molecule> mol, std::shared_ptr<DFTGrid> &grid, SharedMatrix veff) {
 
 	int natoms = mol->natom();
 	for (int a = 0; a < natoms; a++) {
@@ -63,20 +59,15 @@ void compute_veff(std::shared_ptr<Molecule> mol, DFTGrid grid, SharedMatrix veff
 		double* alpha_a = &alphas[c_aIndex[Z-1]];
 		int nc_a = c_aIndex[Z] - c_aIndex[Z-1];
 
-		int running_total = 0; //DEBUG
-		
-		for (const auto &block : grid.blocks()) {
+		for (std::vector<std::shared_ptr<BlockOPoints>>::const_iterator it = grid->blocks().begin(); it != grid->blocks().end(); it++) {
+			auto block = *it;
+
 			int npoints = block->npoints();
 			int b = block->index();
-
-			if (b > veff->nrow()) std::cout << "b " << b << " nrow " << veff->nrow() << std::endl;
-			if (npoints > veff->ncol()) std::cout << "npoints " << npoints << " ncol " << veff->ncol() << std::endl;
 
 			double* x = block->x();
 			double* y = block->y();
 			double* z = block->z();
-
-			std::cout << "Computed " << running_total << " points. block " << block->index() << "\n";
 
 			//einsums("i,ip->p", 𝕔[A], erf(α⊗ r))/r
 			for (int p = 0; p < npoints; p++) {
@@ -90,14 +81,12 @@ void compute_veff(std::shared_ptr<Molecule> mol, DFTGrid grid, SharedMatrix veff
 				outer -= Z/dist;
 				veff->set(b, p, outer);
 			}
-
-			running_total += npoints; //DEBUG
 		}
 	}
 }
 
 //Scalar Relativistic Kinetic Energy Matrix
-void compute_TSR(DFTGrid grid, BasisFunctions &props, SharedMatrix &veff, SharedMatrix &T_SR) {
+void compute_TSR(std::shared_ptr<DFTGrid> & grid, BasisFunctions &props, SharedMatrix &veff, SharedMatrix &T_SR) {
 
 	double** veffp = veff->pointer();
 	double** T_SRp = T_SR->pointer();
@@ -105,13 +94,10 @@ void compute_TSR(DFTGrid grid, BasisFunctions &props, SharedMatrix &veff, Shared
 
 	double* kernel = new double[props.max_points()];
 
-	int running_total = 0; //DEBUG LINE
-
-	for (const auto &block : grid.blocks()) {
+	for (const auto &block : grid->blocks()) {
 	  const auto &bf_map = block->functions_local_to_global();
 		auto local_nbf = bf_map.size();
 		int npoints = block->npoints();
-
 
 		props.compute_functions(block);
 		auto phi_x = props.basis_value("PHI_X");
@@ -120,17 +106,10 @@ void compute_TSR(DFTGrid grid, BasisFunctions &props, SharedMatrix &veff, Shared
 
 		double* w = block->w();
 
-		if (block->index() == 591) {
-			std::cout << "block index " << block->index() << std::endl;
-			std::cout << phi_y->nrow() << ", " << phi_y->ncol() << std::endl;
-			std::cout << "npoints = " << npoints << std::endl;
-		}
 		//preprocess kernel c²/(2c²-veff) * weight
 		for (int p = 0; p < npoints; p++) {
 			kernel[p] = speed_of_light *speed_of_light /(2.*speed_of_light *speed_of_light - veffp[block->index()][p]) * w[p];
 		}
-
-		std::cout << "Computed " << running_total << " points. block " << block->index() << "\n";
 
 		for (int l_mu = 0; l_mu < local_nbf; l_mu++) {
 			int mu = bf_map[l_mu];
@@ -141,7 +120,6 @@ void compute_TSR(DFTGrid grid, BasisFunctions &props, SharedMatrix &veff, Shared
 				}
 			}
 		}
-		running_total += npoints; //DEBUG LINE
 	}
 
 
@@ -149,7 +127,7 @@ void compute_TSR(DFTGrid grid, BasisFunctions &props, SharedMatrix &veff, Shared
 	delete kernel;
 }
 
-void compute_SO(DFTGrid grid, BasisFunctions &props, SharedMatrix veff, SharedMatrix H_SOx, SharedMatrix H_SOy, SharedMatrix H_SOz) {
+void compute_SO(std::shared_ptr<DFTGrid> &grid, BasisFunctions &props, SharedMatrix veff, SharedMatrix H_SOx, SharedMatrix H_SOy, SharedMatrix H_SOz) {
 	double** veffp = veff->pointer();
 	int max_funcs = props.max_functions();
 
@@ -159,7 +137,7 @@ void compute_SO(DFTGrid grid, BasisFunctions &props, SharedMatrix veff, SharedMa
 
 	double* kernel = new double[props.max_points()];
 
-	for (const auto &block : grid.blocks()) {
+	for (const auto &block : grid->blocks()) {
 		int npoints = block->npoints();
 		int local_nbf = block->local_nbf();
 
@@ -217,55 +195,65 @@ int read_options(std::string name, Options& options)
 
 extern "C" PSI_API
 SharedWavefunction zora_core_excitation(std::shared_ptr<scf::HF> ref_wfn, Options& options) {
-	if(!ref_wfn) throw PSIEXCEPTION("SCF has not ran yet!");
-
-	int print = options.get_int("PRINT");
-	printf("Print option = %d\n", print);
-
 	auto Vpot = ref_wfn->V_potential();
 	if (!Vpot) throw PSIEXCEPTION("Must run DFT method");
 
 	auto primary = ref_wfn->basisset();
-	auto mol = ref_wfn->molecule();
+	std::shared_ptr<DFTGrid> grid = Vpot->grid();
 
-
-	std::map<std::string, int> intopts;
-	std::map<std::string, std::string> stropts;
-
-	const auto grid = DFTGrid(mol, primary, intopts, stropts, options);
-
-	//std::shared_ptr<DFTGrid> grid = Vpot->grid();
-
-	BasisFunctions bf_computer(primary, grid.max_points(), grid.max_functions());
+	BasisFunctions bf_computer(primary, grid->max_points(), grid->max_functions());
 	bf_computer.set_deriv(1);
 	int max_funcs = bf_computer.max_functions();
 
-	timer_on("Compute Veff");
-	int nblocks = grid.blocks().size();
-	auto veff = std::make_shared<Matrix>("Effective potential", nblocks, bf_computer.max_points());
-	compute_veff(primary->molecule(), grid, veff);
-	timer_off("Compute Veff");
+	std::cout << std::endl;
 
-	timer_on("Scalar Relativistic Kinetic");
-	auto T_SR = std::make_shared<Matrix>(max_funcs, max_funcs);
-	compute_TSR(grid, bf_computer, veff, T_SR);
-	timer_off("Scalar Relativistic Kinetic");
+	int i = 0;
+	int prev_b = -1;
+	int expected_index = 0;
+	for (const auto& block : grid->blocks()) {
+		int b = block->index();
+		if (b != prev_b + 1) {
+			std::cout << "Skipped " << b-prev_b-1 << " block. " << prev_b << "-->" << b << std::endl;
+			expected_index += b-prev_b-1;
+		}
+		i++;
+		expected_index++;
+		prev_b = b;
+	}
+	std::shared_ptr<BlockOPoints> last_block = *(grid->blocks().end()-1);
+	std::cout << "\nIndex of last block: " << last_block->index() << "\n";
+	std::cout <<   "Expected index:      " << expected_index - 1 << "\n\n";
 
-	std::cout<<"Computed TSR"<<std::endl;
+	std::cout <<   "Number of blocks:    " << Vpot->nblocks() << "\n";
+	std::cout <<   "Number of indicies:  " << i << std::endl;
 
-	timer_on("Spin-orbit terms");
-	auto H_SOx = std::make_shared<Matrix>("H_SOx", max_funcs, max_funcs);
-	auto H_SOy = std::make_shared<Matrix>("H_SOy", max_funcs, max_funcs);
-	auto H_SOz = std::make_shared<Matrix>("H_SOz", max_funcs, max_funcs);
-	compute_SO(grid, bf_computer, veff, H_SOx, H_SOy, H_SOz);
-	timer_off("Spin-orbit terms");
+	//timer_on("Compute Veff");
+	//int nblocks = grid->blocks().size();
+	//auto veff = std::make_shared<Matrix>("Effective potential", nblocks, bf_computer.max_points());
+	//compute_veff(primary->molecule(), grid, veff);
+	//std::cout << "Computed effective potential!" << std::endl;
+	//timer_off("Compute Veff");
 
-	std::cout<<"Computed HSO terms"<<std::endl;
+	//timer_on("Scalar Relativistic Kinetic");
+	//auto T_SR = std::make_shared<Matrix>(max_funcs, max_funcs);
+	//compute_TSR(grid, bf_computer, veff, T_SR);
+	//timer_off("Scalar Relativistic Kinetic");
 
-	T_SR->save("mats/T_SR.mat", false, false);
-	H_SOx->save("mats/H_SOx.mat", false, false);
-	H_SOy->save("mats/H_SOy.mat", false, false);
-	H_SOz->save("mats/H_SOz.mat", false, false);
+	//std::cout<<"Computed TSR"<<std::endl;
+
+	//timer_on("Spin-orbit terms");
+	//auto H_SOx = std::make_shared<Matrix>("H_SOx", max_funcs, max_funcs);
+	//auto H_SOy = std::make_shared<Matrix>("H_SOy", max_funcs, max_funcs);
+	//auto H_SOz = std::make_shared<Matrix>("H_SOz", max_funcs, max_funcs);
+	//compute_SO(grid, bf_computer, veff, H_SOx, H_SOy, H_SOz);
+	//timer_off("Spin-orbit terms");
+
+	//std::cout<<"Computed HSO terms"<<std::endl;
+
+	//T_SR->save("mats/T_SR.mat", false, false);
+	//H_SOx->save("mats/H_SOx.mat", false, false);
+	//H_SOy->save("mats/H_SOy.mat", false, false);
+	//H_SOz->save("mats/H_SOz.mat", false, false);
 
 	return ref_wfn;
 }
