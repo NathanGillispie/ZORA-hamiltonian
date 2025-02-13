@@ -3,7 +3,7 @@ import os
 import numpy as np
 import pickle as pkl
 
-def get_psi4_mats():
+def get_psi4_mats(dim):
     mats_files = [f for f in os.listdir() if f.endswith('.mat')]
     mats = {}
 
@@ -20,7 +20,7 @@ def get_psi4_mats():
 
         rows = [int(i) for i in mat[0]]
         cols = [int(i) for i in mat[1]]
-        dim = max(max(rows), max(cols))
+        #dim = max(max(rows), max(cols))
 
         a = np.zeros((dim+1, dim+1))
         for g in range(mat.shape[1]):
@@ -44,9 +44,9 @@ def diff_mat(a, b):
     return diff
 
 if __name__ == '__main__':
-    psi4m = get_psi4_mats()
     bohrm = get_pkl('bohrmats.pkl')
-
+    dim = bohrm[list(bohrm.keys())[0]].shape[0]
+    psi4m = get_psi4_mats(dim-1)
     common = list(set(psi4m.keys()).intersection(set(bohrm.keys())))
 
     if (bohrm[common[0]].shape != psi4m[common[0]].shape):

@@ -3,16 +3,21 @@ import zora_core_excitation
 
 molecule {
 0 1
-Ne 0 0 0
+  O      0.00000000     0.00000000     0.11726921
+  H      0.75698224     0.00000000    -0.46907685
+  H     -0.75698224     0.00000000    -0.46907685
 symmetry c1
 }
 
 set {
-  basis cc-pvdz
+  basis sto-3g
   scf_type pk
-	dft_radial_points 600
+  dft_radial_points 600
   reference rks
 }
+
+psi4.core.set_num_threads(1)
+print("Using %d threads" % psi4.core.get_num_threads())
 
 h_energy, wfn = energy('pbe0', return_wfn=True)
 print("pbe0 energy = %f" % h_energy)

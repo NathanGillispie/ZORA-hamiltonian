@@ -41,14 +41,23 @@
 #include "psi4/libscf_solver/hf.h"
 #include <cmath>
 
+#ifdef _OPENMP
+#include "psi4/libpsi4util/process.h"
+#include <omp.h>
+#endif
+
 namespace psi{ namespace zora_core_excitation {
 
 #include "bigScaryModelBasis.h"
 #define C 137.037
 
+
 void compute_veff(std::shared_ptr<Molecule> mol, std::shared_ptr<DFTGrid> &grid, SharedMatrix veff) {
-	
-	double** veffp = veff->pointer();
+
+	int nthreads_ = 1;
+#ifdef _OPENMP
+	nthreads_ = Process::environment.get_n_threads();
+#endif
 	int natoms = mol->natom();
 	for (int a = 0; a < natoms; a++) {
 		int Z = mol->Z(a);
@@ -61,6 +70,7 @@ void compute_veff(std::shared_ptr<Molecule> mol, std::shared_ptr<DFTGrid> &grid,
 		int nc_a = c_aIndex[Z] - c_aIndex[Z-1];
 
 		int index = 0;
+#pragma omp parallel for schedule(dynamic) num_threads(nthreads_)
 		for (const auto &block : grid->blocks()) {
 			int npoints = block->npoints();
 
@@ -78,7 +88,7 @@ void compute_veff(std::shared_ptr<Molecule> mol, std::shared_ptr<DFTGrid> &grid,
 				}
 				outer /= dist;
 				outer -= Z/dist;
-				veffp[index][p] = outer;
+				veff->set(index, p, outer);
 			}
 			index++;
 		}
@@ -87,8 +97,6 @@ void compute_veff(std::shared_ptr<Molecule> mol, std::shared_ptr<DFTGrid> &grid,
 
 //Scalar Relativistic Kinetic Energy Matrix
 void compute_TSR(std::shared_ptr<DFTGrid> &grid, BasisFunctions &props, SharedMatrix veff, SharedMatrix &T_SR) {
-
-	double** veffp = veff->pointer();
 	double** T_SRp = T_SR->pointer();
 	int max_funcs = props.max_functions();
 
@@ -109,7 +117,7 @@ void compute_TSR(std::shared_ptr<DFTGrid> &grid, BasisFunctions &props, SharedMa
 
 		//preprocess kernel c²/(2c²-veff) * weight
 		for (int p = 0; p < npoints; p++) {
-			kernel[p] = C *C /(2.*C *C - veffp[index][p]) * w[p];
+			kernel[p] = C *C /(2.*C *C - veff->get(index,p)) * w[p];
 		}
 
 		for (int l_mu = 0; l_mu < local_nbf; l_mu++) {
@@ -130,8 +138,6 @@ void compute_TSR(std::shared_ptr<DFTGrid> &grid, BasisFunctions &props, SharedMa
 
 void compute_SO(std::shared_ptr<DFTGrid> &grid, BasisFunctions &props, SharedMatrix veff, SharedMatrix H_SOx, SharedMatrix H_SOy, SharedMatrix H_SOz) {
 	int max_funcs = props.max_functions();
-
-	double** veffp  = veff->pointer();
 	double** H_SOxp = H_SOx->pointer();
 	double** H_SOyp = H_SOy->pointer();
 	double** H_SOzp = H_SOz->pointer();
@@ -151,7 +157,7 @@ void compute_SO(std::shared_ptr<DFTGrid> &grid, BasisFunctions &props, SharedMat
 		auto w = block->w();
 		//preprocess kernel veff/(4c²-2veff) * weight
 		for (int p = 0; p < npoints; p++) {
-			kernel[p] = veffp[index][p]/(4.*C *C  - 2.*veffp[index][p]) * w[p];
+			kernel[p] = veff->get(index, p)/(4.*C *C  - 2.*veff->get(index, p)) * w[p];
 		}
 		
 	  const auto &bf_map = block->functions_local_to_global();
@@ -206,7 +212,8 @@ SharedWavefunction zora_core_excitation(std::shared_ptr<scf::HF> ref_wfn, Option
 	auto primary = ref_wfn->basisset();
 	BasisFunctions bf_computer(primary, grid->max_points(), grid->max_functions());
 	bf_computer.set_deriv(1);
-	int max_funcs = bf_computer.max_functions();
+	int max_funcs = grid->max_functions();
+	std::cout << "max functions: " << max_funcs << std::endl;
 
 	timer_on("Compute Veff");
 	int nblocks = grid->blocks().size();
