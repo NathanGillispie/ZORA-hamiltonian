@@ -6,6 +6,7 @@ Makefile
 
 # Python files
 __pycache__/
+*.pkl
 
 # Psi4 generated files
 *.dat

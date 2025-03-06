@@ -14,15 +14,14 @@ import numpy as np
 
 INPUT = """
 start molecule
- V    0.00  0.00  0.00
- F    1.86  0.00  0.00
- F   -0.93  1.61  0.00
- F    0.93 -1.61  0.00
+  O      0.00000000     0.00000000     0.11726921
+  H      0.75698224     0.00000000    -0.46907685
+  H     -0.75698224     0.00000000    -0.46907685
 end molecule
 
-charge 2
+charge 0
 spin 0
-basis cc-pvdz
+basis def2-tzvp
 diis true
 units angstrom
 relativistic zora
@@ -210,24 +209,29 @@ for i, name in enumerate(["T_SR", "H_SOx", "H_SOy", "H_SOz"]):
     print(f"\n{name}")
     diff_mat(R @ psi4m[name] @ R.T, bohrm[name], ovlperr)
 
-# tdiff = bohrm['T_SR'] - R @ psi4m['T_SR'] @ R.T
-# for i in range(nbf):
-#     print(np.array2string(np.diag(tdiff)[i],precision=7),"\t", labels[i])
+tdiff = bohrm['T_SR'] - R @ psi4m['T_SR'] @ R.T
+for i in range(nbf):
+    print(np.array2string(np.diag(tdiff)[i],precision=7),"\t", labels[i])
 
-# veffb = bohrm['veff']
-# veffb.sort()
-# veffbmag = np.log10(-1 * veffb[:200000])
-#
-# veff = psi4m['veff'].flatten()
-# veff.sort()
-# veffmag = np.log10(-1 * veff[:330000])
-#
-# import matplotlib.pyplot as plt
-# plt.ion()
-# fig, ax = plt.subplots(1,2,tight_layout=True)
-# ax[0].hist(veffmag, bins=30)
-# ax[1].hist(veffbmag, bins=30)
-# plt.pause(2)
-# plt.ioff()
+veffb = bohrm['veff']
+veffb = np.asarray([i for i in veffb if i < -1e-9])
+veffbmag = np.log10(-1 * veffb)
+
+veff = psi4m['veff'].flatten()
+veff = np.asarray([i for i in veff if i < -1e-9])
+veffmag = np.log10(-1 * veff)
+
+import matplotlib.pyplot as plt
+fig, ax = plt.subplots(1,2,tight_layout=True)
+fig.title = "Histogram of veff"
+ax[0].hist(veffmag, bins=20, range=(-5,5))
+ax[0].set_xlabel("log10(-veff)")
+ax[0].set_title("Psi4")
+
+ax[1].hist(veffbmag, bins=20, range=(-5,5))
+ax[1].set_xlabel("log10(-veff)")
+ax[1].set_title("Bohr")
+plt.show()
+
 
 

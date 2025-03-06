@@ -2,21 +2,21 @@ sys.path.insert(0, './..')
 import zora_core_excitation
 
 molecule {
-2 1
- V    0.00  0.00  0.00
- F    1.86  0.00  0.00
- F   -0.93  1.61  0.00
- F    0.93 -1.61  0.00
+0 1
+  O      0.00000000     0.00000000     0.11726921
+  H      0.75698224     0.00000000    -0.46907685
+  H     -0.75698224     0.00000000    -0.46907685
 symmetry c1
 units angstrom
 }
 
 set {
-  basis sto-3g
+  basis def2-tzvp
   scf_type pk
   dft_radial_points 100
   dft_spherical_points 350
   reference rks
+  dft_radial_scheme becke
 }
 
 psi4.core.set_num_threads(4)
