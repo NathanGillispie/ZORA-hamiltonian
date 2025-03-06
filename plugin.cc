@@ -39,25 +39,19 @@
 #include "psi4/libfock/cubature.h"
 #include "psi4/libfock/v.h"
 #include "psi4/libscf_solver/hf.h"
-#include <cmath>
+#include "psi4/physconst.h"
 
-#ifdef _OPENMP
-#include "psi4/libpsi4util/process.h"
-#include <omp.h>
-#endif
+#include <cmath>
 
 namespace psi{ namespace zora_core_excitation {
 
 #include "bigScaryModelBasis.h"
-#define C 137.037
 
+void compute_veff(std::shared_ptr<Molecule> mol, std::shared_ptr<DFTGrid> &grid, SharedMatrix veff)
+{
+	// Speed of light in atomic units
+	double C = pc_c_au;
 
-void compute_veff(std::shared_ptr<Molecule> mol, std::shared_ptr<DFTGrid> &grid, SharedMatrix veff) {
-
-	int nthreads_ = 1;
-#ifdef _OPENMP
-	nthreads_ = Process::environment.get_n_threads();
-#endif
 	int natoms = mol->natom();
 	for (int a = 0; a < natoms; a++) {
 		int Z = mol->Z(a);
@@ -70,7 +64,6 @@ void compute_veff(std::shared_ptr<Molecule> mol, std::shared_ptr<DFTGrid> &grid,
 		int nc_a = c_aIndex[Z] - c_aIndex[Z-1];
 
 		int index = 0;
-#pragma omp parallel for schedule(dynamic) num_threads(nthreads_)
 		for (const auto &block : grid->blocks()) {
 			int npoints = block->npoints();
 
@@ -78,33 +71,64 @@ void compute_veff(std::shared_ptr<Molecule> mol, std::shared_ptr<DFTGrid> &grid,
 			double* y = block->y();
 			double* z = block->z();
 
-			//einsums("i,ip->p", 𝕔[A], erf(α⊗ r))/r
+			//einsums("i,ip->p", 𝕔[i], erf(α[i]⊗ r[p]))/r[p]
 			for (int p = 0; p < npoints; p++) {
 				double dist = hypot(pos_a[0]-x[p], pos_a[1]-y[p], pos_a[2]-z[p]);
 				double outer = 0;
 				for (int i = 0; i < nc_a; i++) {
-					//check to make sure this is the correct erf
 					outer += std::erf(dist * alpha_a[i]) * coef_a[i];
 				}
 				outer /= dist;
 				outer -= Z/dist;
-				veff->set(index, p, outer);
+				veff->add(index, p, outer);
 			}
 			index++;
 		}
 	}
 }
 
+// Sanity check method
+void compute_overlap(std::shared_ptr<DFTGrid> &grid, BasisFunctions &props, SharedMatrix &overlap, int nbf)
+{
+	double** ovlp = overlap->pointer();
+
+	int index = 0;
+	for (const auto &block : grid->blocks()) {
+		const auto &bf_map = block->functions_local_to_global();
+		auto local_nbf = bf_map.size();
+		int npoints = block->npoints();
+
+		props.compute_functions(block);
+		auto phi = props.basis_value("PHI");
+
+		double* w = block->w();
+
+		for (int l_mu = 0; l_mu < local_nbf; l_mu++) {
+			int mu = bf_map[l_mu];
+			for (int l_nu = l_mu; l_nu < local_nbf; l_nu++) {
+				int nu = bf_map[l_nu];
+				for (int p = 0; p < npoints; p++) {
+					ovlp[mu][nu] += w[p] * phi->get(p,l_mu) * phi->get(p,l_nu);
+				}
+			}
+		}
+		index++;
+	}
+
+	overlap->copy_upper_to_lower();
+}
+
 //Scalar Relativistic Kinetic Energy Matrix
-void compute_TSR(std::shared_ptr<DFTGrid> &grid, BasisFunctions &props, SharedMatrix veff, SharedMatrix &T_SR) {
+void compute_TSR(std::shared_ptr<DFTGrid> &grid, BasisFunctions &props, SharedMatrix veff, SharedMatrix &T_SR, int nbf)
+{
+	double C = pc_c_au;
 	double** T_SRp = T_SR->pointer();
-	int max_funcs = props.max_functions();
 
 	double* kernel = new double[props.max_points()];
 
 	int index = 0;
 	for (const auto &block : grid->blocks()) {
-	  const auto &bf_map = block->functions_local_to_global();
+		const auto &bf_map = block->functions_local_to_global();
 		auto local_nbf = bf_map.size();
 		int npoints = block->npoints();
 
@@ -125,7 +149,12 @@ void compute_TSR(std::shared_ptr<DFTGrid> &grid, BasisFunctions &props, SharedMa
 			for (int l_nu = l_mu; l_nu < local_nbf; l_nu++) {
 				int nu = bf_map[l_nu];
 				for (int p = 0; p < npoints; p++) {
-					T_SRp[mu][nu] += ( phi_x->get(p,l_mu)*phi_x->get(p,l_nu) + phi_y->get(p,l_mu)*phi_y->get(p,l_nu) + phi_z->get(p,l_mu)*phi_z->get(p,l_nu) ) * kernel[p];
+
+					T_SRp[mu][nu] += kernel[p] * (
+						phi_x->get(p,l_mu)*phi_x->get(p,l_nu) +
+						phi_y->get(p,l_mu)*phi_y->get(p,l_nu) +
+						phi_z->get(p,l_mu)*phi_z->get(p,l_nu) );
+
 				}
 			}
 		}
@@ -136,8 +165,9 @@ void compute_TSR(std::shared_ptr<DFTGrid> &grid, BasisFunctions &props, SharedMa
 	delete kernel;
 }
 
-void compute_SO(std::shared_ptr<DFTGrid> &grid, BasisFunctions &props, SharedMatrix veff, SharedMatrix H_SOx, SharedMatrix H_SOy, SharedMatrix H_SOz) {
-	int max_funcs = props.max_functions();
+void compute_SO(std::shared_ptr<DFTGrid> &grid, BasisFunctions &props, SharedMatrix veff, SharedMatrix H_SOx, SharedMatrix H_SOy, SharedMatrix H_SOz, int nbf)
+{
+	double C = pc_c_au;
 	double** H_SOxp = H_SOx->pointer();
 	double** H_SOyp = H_SOy->pointer();
 	double** H_SOzp = H_SOz->pointer();
@@ -146,6 +176,7 @@ void compute_SO(std::shared_ptr<DFTGrid> &grid, BasisFunctions &props, SharedMat
 
 	int index = 0;
 	for (const auto &block : grid->blocks()) {
+		const auto &bf_map = block->functions_local_to_global();
 		int npoints = block->npoints();
 		int local_nbf = block->local_nbf();
 
@@ -160,7 +191,6 @@ void compute_SO(std::shared_ptr<DFTGrid> &grid, BasisFunctions &props, SharedMat
 			kernel[p] = veff->get(index, p)/(4.*C *C  - 2.*veff->get(index, p)) * w[p];
 		}
 		
-	  const auto &bf_map = block->functions_local_to_global();
 		//compute upper triangular half. H_SO are antisymmetric.
 		for (int mu_l = 0; mu_l < local_nbf; mu_l++) {
 			int mu = bf_map[mu_l];
@@ -177,7 +207,7 @@ void compute_SO(std::shared_ptr<DFTGrid> &grid, BasisFunctions &props, SharedMat
 	}
 	
 	//keep it simple silly
-	for (int mu = 0; mu < max_funcs; mu++) {
+	for (int mu = 0; mu < nbf; mu++) {
 		for (int nu = mu - 1; nu >= 0; nu--) {
 			H_SOxp[mu][nu] = -H_SOxp[nu][mu];
 			H_SOyp[mu][nu] = -H_SOyp[nu][mu];
@@ -202,47 +232,56 @@ int read_options(std::string name, Options& options)
 }
 
 extern "C" PSI_API
-SharedWavefunction zora_core_excitation(std::shared_ptr<scf::HF> ref_wfn, Options& options) {
+SharedWavefunction zora_core_excitation(std::shared_ptr<scf::HF> ref_wfn, Options& options)
+{
 	auto Vpot = ref_wfn->V_potential();
 	if (!Vpot) throw PSIEXCEPTION("Must run DFT method");
-
 	std::shared_ptr<DFTGrid> grid = Vpot->grid();
-	//would ideally like to replace this grid object
+	//Would like to replace this with a custom grid object
+	int nblocks = grid->blocks().size();
+	int max_points = grid->max_points();
+	int max_funcs = grid->max_functions();
 
 	auto primary = ref_wfn->basisset();
-	BasisFunctions bf_computer(primary, grid->max_points(), grid->max_functions());
-	bf_computer.set_deriv(1);
-	int max_funcs = grid->max_functions();
-	std::cout << "max functions: " << max_funcs << std::endl;
+	int nbf = primary->nbf();
 
-	timer_on("Compute Veff");
-	int nblocks = grid->blocks().size();
-	auto veff = std::make_shared<Matrix>("Effective potential", nblocks, bf_computer.max_points());
+	BasisFunctions bf_computer(primary, max_points, max_funcs);
+	bf_computer.set_deriv(1);
+
+	timer_on("Effective Potential");
+	auto veff = std::make_shared<Matrix>("Effective potential", nblocks, max_points);
 	compute_veff(primary->molecule(), grid, veff);
-	timer_off("Compute Veff");
+	timer_off("Effective Potential");
 
 	printf("Computed effective potential.\n");
 
 	timer_on("Scalar Relativistic Kinetic");
-	auto T_SR = std::make_shared<Matrix>(max_funcs, max_funcs);
-	compute_TSR(grid, bf_computer, veff, T_SR);
+	auto T_SR = std::make_shared<Matrix>(nbf, nbf);
+	compute_TSR(grid, bf_computer, veff, T_SR, nbf);
 	timer_off("Scalar Relativistic Kinetic");
 
 	printf("Computed TSR.\n");
 
 	timer_on("Spin-orbit terms");
-	auto H_SOx = std::make_shared<Matrix>("H_SOx", max_funcs, max_funcs);
-	auto H_SOy = std::make_shared<Matrix>("H_SOy", max_funcs, max_funcs);
-	auto H_SOz = std::make_shared<Matrix>("H_SOz", max_funcs, max_funcs);
-	compute_SO(grid, bf_computer, veff, H_SOx, H_SOy, H_SOz);
+	auto H_SOx = std::make_shared<Matrix>("H_SOx", nbf, nbf);
+	auto H_SOy = std::make_shared<Matrix>("H_SOy", nbf, nbf);
+	auto H_SOz = std::make_shared<Matrix>("H_SOz", nbf, nbf);
+	compute_SO(grid, bf_computer, veff, H_SOx, H_SOy, H_SOz, nbf);
 	timer_off("Spin-orbit terms");
 
 	printf("Computed spin-orbit terms.\n");
 
-	T_SR->save("mats/T_SR.mat", false, false);
-	H_SOx->save("mats/H_SOx.mat", false, false);
-	H_SOy->save("mats/H_SOy.mat", false, false);
-	H_SOz->save("mats/H_SOz.mat", false, false);
+	auto overlap = std::make_shared<Matrix>("overlap", nbf, nbf);
+	compute_overlap(grid, bf_computer, overlap, nbf);
+
+	printf("Saving matricies.\n");
+
+	ref_wfn->set_array_variable("T_SR" , T_SR );
+	ref_wfn->set_array_variable("H_SOx", H_SOx);
+	ref_wfn->set_array_variable("H_SOy", H_SOy);
+	ref_wfn->set_array_variable("H_SOz", H_SOz);
+	ref_wfn->set_array_variable("overlap", overlap);
+	ref_wfn->set_array_variable("veff", veff);
 
 	return ref_wfn;
 }

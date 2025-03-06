@@ -2,24 +2,46 @@ sys.path.insert(0, './..')
 import zora_core_excitation
 
 molecule {
-0 1
-  O      0.00000000     0.00000000     0.11726921
-  H      0.75698224     0.00000000    -0.46907685
-  H     -0.75698224     0.00000000    -0.46907685
+2 1
+ V    0.00  0.00  0.00
+ F    1.86  0.00  0.00
+ F   -0.93  1.61  0.00
+ F    0.93 -1.61  0.00
 symmetry c1
+units angstrom
 }
 
 set {
   basis sto-3g
   scf_type pk
-  dft_radial_points 600
+  dft_radial_points 100
+  dft_spherical_points 350
   reference rks
 }
 
-psi4.core.set_num_threads(1)
+psi4.core.set_num_threads(4)
 print("Using %d threads" % psi4.core.get_num_threads())
 
 h_energy, wfn = energy('pbe0', return_wfn=True)
 print("pbe0 energy = %f" % h_energy)
 
+# molden(wfn, "VF3.molden", density_a=wfn.Da())
+
 zora_core_excitation.form_H(wfn)
+
+H = {}
+
+if wfn.has_array_variable("T_SR"):
+	H['T_SR'] = wfn.array_variable("T_SR").to_array()
+	H['H_SOx'] = wfn.array_variable("H_SOx").to_array()
+	H['H_SOy'] = wfn.array_variable("H_SOy").to_array()
+	H['H_SOz'] = wfn.array_variable("H_SOz").to_array()
+	H['overlap'] = wfn.array_variable("overlap").to_array()
+	H['veff'] = wfn.array_variable("veff").to_array()
+	print("Mats obtained")
+
+import pickle
+with open("mats/p4mats.pkl", "wb") as f:
+	pickle.dump(H, f)
+	print("Pickle saved")
+
